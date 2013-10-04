@@ -13,30 +13,45 @@ use Cwd qw(getcwd);
 our $BASE_DIR = getcwd();
 our %filecache;
 
-no warnings 'redefine';
-my $ORIGINAL_ok = \&Test::Builder::ok;
-*Test::Builder::ok = sub {
-	@_ = @_; # for pass and fail
-	$_[2] = do {
-		my ($package, $filename, $line) = caller($Test::Builder::Level);
-		undef $filename if $filename eq '-e';
-		if ($filename) {
-			$filename = File::Spec->rel2abs($filename, $BASE_DIR);
-			my $file = $filecache{$filename} ||= [ read_file($filename) ];
-			my $lnum = $line;
-			$line = $file->[$lnum-1];
-			$line =~ s{^\s+|\s+$}{}g;
-			if ($_[2]) {
-				"L$lnum: $_[2]";
+sub import {
+	my ($class, @args) = @_;
+
+	my $fn_decode;
+	if (grep { $_ eq ':utf8' } @args) {
+		require Encode;
+		$fn_decode = \&Encode::decode_utf8;
+	} else {
+		$fn_decode = sub { return $_[0] };
+	}
+
+	my $ORIGINAL_ok = \&Test::Builder::ok;
+
+	my $NEW_ok = sub {
+		@_ = @_; # for pass and fail
+		$_[2] = do {
+			my ($package, $filename, $line) = caller($Test::Builder::Level);
+			undef $filename if $filename eq '-e';
+			if ($filename) {
+				$filename = File::Spec->rel2abs($filename, $BASE_DIR);
+				my $file = $filecache{$filename} ||= [ read_file($filename) ];
+				my $lnum = $line;
+				$line = $file->[$lnum-1];
+				$line =~ s{^\s+|\s+$}{}g;
+				if ($_[2]) {
+					&$fn_decode("L$lnum: $_[2]");
+				} else {
+					&$fn_decode("L$lnum: $line");
+				}
 			} else {
-				"L$lnum: $line";
+				""; # invalid $Test::Builder::Level
 			}
-		} else {
-			""; # invalid $Test::Builder::Level
-		}
+		};
+		goto &$ORIGINAL_ok;
 	};
-	goto &$ORIGINAL_ok;
-};
+
+	no warnings 'redefine';
+	*Test::Builder::ok = $NEW_ok;
+}
 
 
 1;
